@@ -13,80 +13,87 @@ pip install langgraph
 Agent là một thực thể có thể thực hiện các tác vụ cụ thể trong quy trình công việc. Dưới đây là ví dụ về cách tạo một agent đơn giản:
 
 ```
-from langgraph import Agent
+from langchain import hub
+from langchain.agents import create_openai_functions_agent
+from langchain_openai.chat_models import ChatOpenAI
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langgraph.graph import StateGraph
 
-class SimpleAgent(Agent):
-    def run(self, data):
-        print("Processing data:", data)
-        return data
+tools = [TavilySearchResults(max_results=1)]
 
-agent = SimpleAgent()
-agent.run("Hello, Langgraph!")
+# Chọn câu prompt để sử dụng 
+prompt = hub.pull("hwchase17/openai-functions-agent")
+
+# Chọn mô hình LLM cho agent
+llm = ChatOpenAI(model="gpt-3.5-turbo-1106", streaming=True)
+
+# Khởi tạo agent
+agent_runnable = create_openai_functions_agent(llm, tools, prompt)
 ```
+
 
 ## 3. Xây Dựng Quy Trình Công Việc (Workflow)
 Một workflow là một chuỗi các tác vụ mà các agent thực hiện. Dưới đây là ví dụ về cách xây dựng một workflow cơ bản:
 
 ```
-from langgraph import Workflow
+from langgraph.graph import END, StateGraph
+from typing import TypedDict, Annotated, List, Union
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_core.messages import BaseMessage
+import operator
 
-class PrintAgent(Agent):
-    def run(self, data):
-        print("Data received:", data)
-        return data
 
-class MultiplyAgent(Agent):
-    def run(self, data):
-        result = data * 2
-        print("Data after multiplication:", result)
-        return result
+class AgentState(TypedDict):
+   # dữ liệu đầu vào
+   input: str
+   # Lịch sử những tin nhắn trước
+   chat_history: list[BaseMessage]
+   agent_outcome: Union[AgentAction, AgentFinish, None]
+   intermediate_steps: Annotated[list[tuple[AgentAction, str]], operator.add]
 
-# Tạo các agent
-print_agent = PrintAgent()
-multiply_agent = MultiplyAgent()
+workflow = StateGraph(AgentState)
 
-# Xây dựng workflow
-workflow = Workflow()
-workflow.add_step(print_agent)
-workflow.add_step(multiply_agent)
-
-# Chạy workflow
-workflow.run(10)
 ```
 
 ## 4. Quản Lý Luồng Công Việc Với Langgraph
 Langgraph cho phép bạn quản lý các luồng công việc một cách hiệu quả thông qua việc định nghĩa các bước và các tác vụ tương ứng. Bạn có thể thêm, xóa hoặc sửa đổi các bước trong quy trình công việc của mình.
 
-Thêm Bước Vào Workflow
+Tạo ra điểm bắt đầu của luồng quản lí công việc
 ```
-workflow.add_step(new_agent, position=2)  # Thêm một agent mới vào vị trí thứ 2
-```
-Xóa Bước Khỏi Workflow
-```
-workflow.remove_step(1)  # Xóa bước thứ 1 khỏi workflow
-```
-Sửa Đổi Bước Trong Workflow
-```
-workflow.update_step(0, updated_agent)  # Cập nhật bước đầu tiên với một agent mới
+workflow.set_entry_point("agent")
 ```
 
-5. Triển Khai Quy Trình Công Việc
+Thêm Bước vào Workflow
+```
+workflow.add_edge('action', 'agent')
+workflow.add_node("agent", run_agent)
+workflow.add_node("action", execute_tools)
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    # Finally we pass in a mapping.
+    # The keys are strings, and the values are other nodes.
+    # END is a special node marking that the graph should finish.
+    # What will happen is we will call `should_continue`, and then the output of that
+    # will be matched against the keys in this mapping.
+    # Based on which one it matches, that node will then be called.
+    {
+        # If `tools`, then we call the tool node.
+        "continue": "action",
+        # Otherwise we finish.
+        "end": END
+    }
+)
+```
+
+## 5. Triển Khai Quy Trình Công Việc
 Sau khi xây dựng và kiểm tra quy trình công việc, bạn có thể triển khai nó vào môi trường thực tế. Điều này có thể được thực hiện bằng cách tích hợp Langgraph vào các ứng dụng hoặc hệ thống của bạn.
 
-Ví Dụ Tích Hợp Với Flask
 ```
-from flask import Flask, request, jsonify
-
-app = Flask(__name__)
-
-@app.route('/run_workflow', methods=['POST'])
-def run_workflow():
-    data = request.json.get('data')
-    result = workflow.run(data)
-    return jsonify({"result": result})
-
-if __name__ == '__main__':
-    app.run(debug=True)
+app = workflow.compile()
 ```
 
 # Kết Luận
